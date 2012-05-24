@@ -8,6 +8,9 @@ import os
 import time
 import re
 import stat
+import tempfile
+import httplib
+import urlparse
 
 from sys import argv
 
@@ -39,11 +42,12 @@ class GDDir:
                          stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH |
                          stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH),
             'st_nlink': 1,
-            'st_size':  0,
+            'st_size':  get_filesize(entry) if entry else 0
         }
         # The id is a unique identifier which can be used to fetch the object
-        # from Google (not so for the root dir, of course).
-        self.id = entry.resourceId.text if entry else '__root__'
+        # from Google
+        self.uri = entry.id.text if entry \
+                else gdocs.DocumentQuery().ToUri() # Root element.
 
     def child(self, name):
         for d in self.dirs:
@@ -77,7 +81,9 @@ class GDFile:
             'st_nlink': 1,
             'st_size':  get_filesize(entry)
         }
-        self.id = entry.resourceId.text
+        self.uri = entry.id.text
+        # Dunno why but the gd parameter makes the request fail.
+        self.src = entry.content.src.replace('&gd=true', '')
 
     def __repr__(self):
         return '<%s %s at 0x%x>' % (self.__class__.__name__, 
@@ -86,13 +92,13 @@ class GDFile:
 class DriveFSError(Exception):
     pass
 
-
 class DriveFS(Operations):
     """"""
     def __init__(self, email, password, path='/'):
         self.client = drive_connect(email, password)
         self.email = email
         self.root = None
+        self.cache = {}
 
         self.refresh() # Set self.root
 
@@ -135,18 +141,32 @@ class DriveFS(Operations):
     ### FUSE methods
     ###
 
-    def readdir(self, path, fh=None):
+    def readdir(self, path, fh):
         if MY_DEBUG:
-            print 'readdir(%s)' % path.encode(CODING)
+            print 'readdir(%s, %s)' % (path.encode(CODING), fh)
         r = self.gdopen(path)
         return ['.', '..'] + [f.name for f in r.dirs + r.files]
 
-    def getattr(self, path, fh=None):
+    def getattr(self, path, fh):
         """Build and return a stat(2)-like dict of attributes."""
         if MY_DEBUG:
-            print 'getattr(%s)' % path.encode(CODING)
+            print 'getattr(%s, %s)' % (path.encode(CODING), fh)
         f = self.gdopen(path)
         return f.stat
+
+    def read(self, path, size, offset, fh):
+        if MY_DEBUG:
+            print 'read(%s, %s, %s, %s)' % \
+                        (path.encode(CODING), size, offset, fh)
+        f = self.gdopen(path)
+        (scheme, host, path, params, query, fragment) \
+                = urlparse.urlparse(f.src)
+        resource = path + params + query + fragment
+        con = httplib.HTTPSConnection(host)
+        con.request('GET', resource, headers={'User-Agent': APP_NAME, 
+                'Range': 'bytes=%d-%d' % (offset, size - offset)})
+        response = con.getresponse()
+        return response.read()
 
 def gdtime_to_ctime(timestr):
     # Note: milliseconds are stripped away.
@@ -183,7 +203,6 @@ def full_split(head):
             break
     return l # Will be reversed!
 
-"""
 def path_to_uri(path):
     if len(path) < 1 or path[0] != '/':
         raise DriveFSError('Invalid path: %s' % path)
@@ -198,13 +217,13 @@ def path_to_uri(path):
         q['title'] = fn.encode(CODING)
         q['title-exact'] = 'true'
         return q.ToUri()
-"""
+
 def get_filesize(entry):
     # Hacking a filesize getter onto the Drive API
     # NOTE: A shameless kludge.
     s = entry.ToString()
     try:
-        m = re.search(r'<ns.:quotaBytesUsed.*>(\d+)</ns.:quotaBytesUsed>', s)
+        m = re.search(r':quotaBytesUsed.*>(\d+)</', s)
         filesize = int(m.groups()[0])
         return filesize
     except AttributeError: # No match
