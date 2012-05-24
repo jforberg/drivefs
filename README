@@ -1,0 +1,15 @@
+DRIVEFS
+-------
+
+Mount your Google Drive account as a FUSE filesystem.
+
+Current limitations of DriveFS:
+
+  * Read-only.
+  * Flat filesystem hierarchy (directories to be implemented).
+ 
+Dependencies:
+
+  * fusepy (http://code.google.com/p/fusepy/)
+  * fuse libraries version 2.6 or later
+  * python 2.5 or later

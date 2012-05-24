@@ -41,6 +41,8 @@ class GDDir:
             'st_nlink': 1,
             'st_size':  0,
         }
+        # The id is a unique identifier which can be used to fetch the object
+        # from Google (not so for the root dir, of course).
         self.id = entry.resourceId.text if entry else '__root__'
 
     def child(self, name):
