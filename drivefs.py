@@ -125,7 +125,7 @@ class DriveFS(Operations):
         f = self.gdopen(path)
         data = None
         # It is not an error to request data beyond the end of the file.
-        if offset > f.size:
+        if not f.size or offset > f.size:
             return ''
         if offset + size > f.size:
             size = f.size - offset
