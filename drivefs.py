@@ -40,6 +40,8 @@ class GDBaseFile:
             'st_mode':  (stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH),
             'st_nlink': 1,
             'st_size':  0,
+            # The blocksize affects the default buffer size for file reads
+            'st_blksize': 65536
         }
         # The id is a unique identifier which can be used to fetch the object
         # from Google
@@ -76,11 +78,11 @@ class GDFile(GDBaseFile):
     def __init__(self, entry):
         GDBaseFile.__init__(self, entry)
         self.stat['st_ctime'] = gdtime_to_ctime(
-                entry.published.text  if entry.published  else 0),
+                entry.published.text  if entry.published  else 0)
         self.stat['st_mtime'] = gdtime_to_ctime(
-                entry.updated.text  if entry.updated  else 0),
+                entry.updated.text  if entry.updated  else 0)
         self.stat['st_atime'] = gdtime_to_ctime(
-                entry.lastViewed.text  if entry.lastViewed  else 0),
+                entry.lastViewed.text  if entry.lastViewed  else 0)
         self.stat['st_mode'] |= stat.S_IFREG
         self.stat['st_size']  = get_filesize(entry)
         self.uri = entry.id.text
@@ -118,13 +120,17 @@ class DriveFS(Operations):
         else:
             return f
     
-    def gdread(self, path, size=0, offset=0):
+    def gdread(self, path, size, offset):
         # A bit of a hack due to Google API's broken HTTP implementation.
         f = self.gdopen(path)
         data = None
+        # It is not an error to request data beyond the end of the file.
+        if offset > f.size:
+            return ''
+        if offset + size > f.size:
+            size = f.size - offset
         # The request fails unless Range is present, for unknown reasons.
-        size = size if size else f.size
-        headers = {'Range': 'bytes=%d-%d' % (offset, size-offset)}
+        headers = {'Range': 'bytes=%d-%d' % (offset, offset + size)}
         try: 
             data = self.client.Get(f.src, extra_headers=headers)
             # Google API will raise an exception even if the request
