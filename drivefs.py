@@ -250,5 +250,5 @@ if __name__ == '__main__':
         print 'Usage: %s <username> <password> <mountpoint>' % argv[0]
         exit(1)
     fs = FUSE(DriveFS(argv[1], argv[2]), argv[3], 
-              foreground=True, nothreads=True)
+              foreground=True, nothreads=True, ro=True)
 
