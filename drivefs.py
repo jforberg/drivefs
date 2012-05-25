@@ -16,6 +16,7 @@ from sys import argv
 
 from fuse import *
 
+import gdata.service as gdata
 import gdata.docs.service as gdocs # API relevant to Drive
 
 __author__ = 'Johan Förberg <johan@forberg.se>'
@@ -25,29 +26,40 @@ MY_DEBUG   = True
 FUSE_DEBUG = False
 CODING     = 'utf-8'
 
-class GDDir:
-    def __init__(self, entry=None, dirs=[], files=[]):
+class GDBaseFile:
+    def __init__(self, entry=None):
         # entry == None means I am the root dir.
         name  = entry.title.text if entry else '/'
         self.name = name.decode(CODING)
-        self.files = files
-        self.dirs  = dirs
         self.stat = {
             'st_ctime': 0,
             'st_mtime': 0,
             'st_atime': 0,
             'st_uid':   os.getuid(),
             'st_gid':   os.getgid(),
-            'st_mode':  (stat.S_IFDIR | 
-                         stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH |
-                         stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH),
+            'st_mode':  (stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH),
             'st_nlink': 1,
-            'st_size':  get_filesize(entry) if entry else 0
+            'st_size':  0,
         }
         # The id is a unique identifier which can be used to fetch the object
         # from Google
         self.uri = entry.id.text if entry \
                 else gdocs.DocumentQuery().ToUri() # Root element.
+
+    # Magic filesize getter.
+    size = property(lambda self: self.stat['st_size'])
+
+    def __repr__(self):
+        return '<%s %s at 0x%x>' % (self.__class__.__name__, 
+                                    self.name, id(self))
+
+class GDDir(GDBaseFile):
+    def __init__(self, entry=None, dirs=[], files=[]):
+        GDBaseFile.__init__(self, entry)
+        self.stat['st_mode'] |= (stat.S_IFDIR |
+                                 stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        self.files = files
+        self.dirs  = dirs
 
     def child(self, name):
         for d in self.dirs:
@@ -60,34 +72,19 @@ class GDDir:
         raise KeyError('Does not exist: %s/%s' % (self.name, name))
         return None
 
-    def __repr__(self):
-        return '<%s %s at 0x%x>' % (self.__class__.__name__, 
-                                    self.name, id(self))
-
-class GDFile:
+class GDFile(GDBaseFile):
     def __init__(self, entry):
-        self.name  = entry.title.text.decode(CODING)
-        self.stat = {
-            'st_ctime': gdtime_to_ctime(
-                            entry.published.text  if entry.published  else 0),
-            'st_mtime': gdtime_to_ctime(
-                            entry.updated.text    if entry.updated    else 0),
-            'st_atime': gdtime_to_ctime(
-                            entry.lastViewed.text if entry.lastViewed else 0),
-            'st_uid':   os.getuid(),
-            'st_gid':   os.getgid(),
-            'st_mode':  (stat.S_IFREG | stat.S_IRUSR | stat.S_IRGRP |
-                         stat.S_IROTH ),
-            'st_nlink': 1,
-            'st_size':  get_filesize(entry)
-        }
+        GDBaseFile.__init__(self, entry)
+        self.stat['st_ctime'] = gdtime_to_ctime(
+                entry.published.text  if entry.published  else 0),
+        self.stat['st_mtime'] = gdtime_to_ctime(
+                entry.updated.text  if entry.updated  else 0),
+        self.stat['st_atime'] = gdtime_to_ctime(
+                entry.lastViewed.text  if entry.lastViewed  else 0),
+        self.stat['st_mode'] |= stat.S_IFREG
+        self.stat['st_size']  = get_filesize(entry)
         self.uri = entry.id.text
-        # Dunno why but the gd parameter makes the request fail.
-        self.src = entry.content.src.replace('&gd=true', '')
-
-    def __repr__(self):
-        return '<%s %s at 0x%x>' % (self.__class__.__name__, 
-                                    self.name, id(self))
+        self.src = entry.content.src
 
 class DriveFSError(Exception):
     pass
@@ -121,11 +118,23 @@ class DriveFS(Operations):
         else:
             return f
     
-    def gdread(self, path, size, offset):
-        f = gdopen(path)
-        data = gdocs.Get(f.src, 
-                extra_headers={'Range': 'bytes=%d-%d' % (offset, size-offset)})
-        return data
+    def gdread(self, path, size=0, offset=0):
+        # A bit of a hack due to Google API's broken HTTP implementation.
+        f = self.gdopen(path)
+        data = None
+        # The request fails unless Range is present, for unknown reasons.
+        size = size if size else f.size
+        headers = {'Range': 'bytes=%d-%d' % (offset, size-offset)}
+        try: 
+            data = self.client.Get(f.src, extra_headers=headers)
+            # Google API will raise an exception even if the request
+            # succeeds with status 206 (Partial Content), as intended.
+        except gdata.RequestError as err:
+            if err[0]['status'] == httplib.PARTIAL_CONTENT:
+                return err[0]['body'] # The data we were looking for.
+            else: 
+                raise # There was some other error.
+        return data # Will never happen.
 
     def gdrefresh(self):
 #        q = gdocs.DocumentQuery(params={'showfolders': 'true'})
@@ -153,21 +162,21 @@ class DriveFS(Operations):
     def readdir(self, path, fh):
         if MY_DEBUG:
             print 'readdir(%s, %s)' % (path.encode(CODING), fh)
-        r = gdopen(path)
+        r = self.gdopen(path)
         return ['.', '..'] + [f.name for f in r.dirs + r.files]
 
     def getattr(self, path, fh):
         """Build and return a stat(2)-like dict of attributes."""
         if MY_DEBUG:
             print 'getattr(%s, %s)' % (path.encode(CODING), fh)
-        f = gdopen(path)
+        f = self.gdopen(path)
         return f.stat
 
     def read(self, path, size, offset, fh):
         if MY_DEBUG:
             print 'read(%s, %s, %s, %s)' % \
                         (path.encode(CODING), size, offset, fh)
-        return gdread(path, size, offset)
+        return self.gdread(path, size, offset)
 
 def gdtime_to_ctime(timestr):
     # Note: milliseconds are stripped away.
