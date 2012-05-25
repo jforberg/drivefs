@@ -16,7 +16,7 @@ from sys import argv
 
 from fuse import *
 
-import gdata.docs.service as gdocs
+import gdata.docs.service as gdocs # API relevant to Drive
 
 __author__ = 'Johan Förberg <johan@forberg.se>'
 
@@ -100,7 +100,7 @@ class DriveFS(Operations):
         self.root = None
         self.cache = {}
 
-        self.refresh() # Set self.root
+        self.gdrefresh() # Set self.root
 
     def __del__(self):
         # Destroy drive connection
@@ -120,8 +120,14 @@ class DriveFS(Operations):
             return None
         else:
             return f
+    
+    def gdread(self, path, size, offset):
+        f = gdopen(path)
+        data = gdocs.Get(f.src, 
+                extra_headers={'Range': 'bytes=%d-%d' % (offset, size-offset)})
+        return data
 
-    def refresh(self):
+    def gdrefresh(self):
 #        q = gdocs.DocumentQuery(params={'showfolders': 'true'})
         q = gdocs.DocumentQuery(params={'showfolders': 'false'})
         entries = self.client.GetDocumentListFeed(q.ToUri()).entry
@@ -138,8 +144,11 @@ class DriveFS(Operations):
         self.root = GDDir(None, files=[GDFile(e) for e in entries])
 
     ###
-    ### FUSE methods
+    ### FUSE method overloads
     ###
+
+    # These methods should be kept very simple. Most things Drive-specific
+    # goes in the gd* methods.
 
     def readdir(self, path, fh):
         if MY_DEBUG:
@@ -158,15 +167,7 @@ class DriveFS(Operations):
         if MY_DEBUG:
             print 'read(%s, %s, %s, %s)' % \
                         (path.encode(CODING), size, offset, fh)
-        f = self.gdopen(path)
-        (scheme, host, path, params, query, fragment) \
-                = urlparse.urlparse(f.src)
-        resource = path + params + query + fragment
-        con = httplib.HTTPSConnection(host)
-        con.request('GET', resource, headers={'User-Agent': APP_NAME, 
-                'Range': 'bytes=%d-%d' % (offset, size - offset)})
-        response = con.getresponse()
-        return response.read()
+        return gdread(path, size, offset)
 
 def gdtime_to_ctime(timestr):
     # Note: milliseconds are stripped away.
