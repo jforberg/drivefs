@@ -153,14 +153,14 @@ class DriveFS(Operations):
     def readdir(self, path, fh):
         if MY_DEBUG:
             print 'readdir(%s, %s)' % (path.encode(CODING), fh)
-        r = self.gdopen(path)
+        r = gdopen(path)
         return ['.', '..'] + [f.name for f in r.dirs + r.files]
 
     def getattr(self, path, fh):
         """Build and return a stat(2)-like dict of attributes."""
         if MY_DEBUG:
             print 'getattr(%s, %s)' % (path.encode(CODING), fh)
-        f = self.gdopen(path)
+        f = gdopen(path)
         return f.stat
 
     def read(self, path, size, offset, fh):
