@@ -21,10 +21,14 @@ import gdata.docs.service as gdocs # API relevant to Drive
 
 __author__ = 'Johan Förberg <johan@forberg.se>'
 
+KBYTES  = 2**10
+MBYTES  = 2**20
+
 APP_NAME   = 'DriveFS'
 MY_DEBUG   = True
 FUSE_DEBUG = False
 CODING     = 'utf-8'
+#CHUNKSIZE  = 4 * MBYTES # Size of a cache chunk.
 
 class GDBaseFile:
     def __init__(self, entry=None):
@@ -75,7 +79,7 @@ class GDDir(GDBaseFile):
         return None
 
 class GDFile(GDBaseFile):
-    def __init__(self, entry):
+    def __init__(self, entry, client):
         GDBaseFile.__init__(self, entry)
         self.stat['st_ctime'] = gdtime_to_ctime(
                 entry.published.text  if entry.published  else 0)
@@ -87,102 +91,125 @@ class GDFile(GDBaseFile):
         self.stat['st_size']  = get_filesize(entry)
         self.uri = entry.id.text
         self.src = entry.content.src
+        self.cache = None
+        self.is_open = False
+        self.client = client
+
+    def open(self):
+        if not self.is_open:
+            self.is_open = True
+
+    def close(self):
+        if self.is_open:
+            self.cache = None # Clear the cache
+            self.is_open = False
+
+    def read(self, size=None, offset=0):
+        if not self.is_open:
+            raise DriveFSError('%s is not open for reading!' % self.name)
+        if size is None:
+            size = self.size - offset
+        if not self.cache:
+            data = None
+            # It is not an error to request data beyond the end of the file.
+            if self.size == 0 or offset > self.size:
+                return ''
+            if offset + size > self.size:
+                size = self.size - offset
+            # The request fails unless Range is present, for unknown reasons.
+            headers = {'Range': 'bytes=%d-%d' % (offset, offset + size)}
+            try: 
+                data = self.client.Get(self.src, extra_headers=headers)
+                # Google API will raise an exception even if the request
+                # succeeds with status 206 (Partial Content), as intended.
+            except gdata.RequestError as err:
+                if err[0]['status'] == httplib.PARTIAL_CONTENT:
+                    data = err[0]['body'] # The data we were looking for.
+                else: 
+                    data = None
+                    raise # There was some other error.
+            self.cache = data
+
+        # We now have a cached copy of the file.
+        return self.cache[offset:size + offset]
 
 class DriveFSError(Exception):
     pass
 
 class DriveFS(Operations):
-    """"""
     def __init__(self, email, password, path='/'):
-        self.client = drive_connect(email, password)
         self.email = email
         self.root = None
-        self.cache = {}
+        self.cache = (None, None)
 
-        self.gdrefresh() # Set self.root
+        self.client = gdocs.DocsService(source=APP_NAME)
+        self.client.http_client.debug = FUSE_DEBUG
+        self.client.ClientLogin(email, password)
+
+        self.refresh_tree() # Set self.root
 
     def __del__(self):
         # Destroy drive connection
         pass
 
-    def gdopen(self, path):
+    def __repr__(self):
+        return '<%s for %s at 0x%x>' % (self.__class__.__name__, self.email, 
+                                        id(self))
+
+    def getfile(self, path):
         pl = full_split(path)
         if not pl or pl.pop() != '/': # Removes /
             raise DriveFSError('Path was not absolute: %s' % path)
-            return None
         f = self.root 
         try:
             while pl:
                 f = f.child(pl.pop())
         except KeyError:
             raise FuseOSError(errno.ENOENT)
-            return None
         else:
             return f
-    
-    def gdread(self, path, size, offset):
-        # A bit of a hack due to Google API's broken HTTP implementation.
-        f = self.gdopen(path)
-        data = None
-        # It is not an error to request data beyond the end of the file.
-        if not f.size or offset > f.size:
-            return ''
-        if offset + size > f.size:
-            size = f.size - offset
-        # The request fails unless Range is present, for unknown reasons.
-        headers = {'Range': 'bytes=%d-%d' % (offset, offset + size)}
-        try: 
-            data = self.client.Get(f.src, extra_headers=headers)
-            # Google API will raise an exception even if the request
-            # succeeds with status 206 (Partial Content), as intended.
-        except gdata.RequestError as err:
-            if err[0]['status'] == httplib.PARTIAL_CONTENT:
-                return err[0]['body'] # The data we were looking for.
-            else: 
-                raise # There was some other error.
-        return data # Will never happen.
 
-    def gdrefresh(self):
-#        q = gdocs.DocumentQuery(params={'showfolders': 'true'})
+    def refresh_tree(self):
         q = gdocs.DocumentQuery(params={'showfolders': 'false'})
         entries = self.client.GetDocumentListFeed(q.ToUri()).entry
-#        folders = [e for e in entries if 
-#                        'folder' in [c.label for c in e.category]
-#                  ]
-#        d_dirs = []
-#        for folder in folders:
-#            children = [e for e in entries if
-#                            folder.title.text in [c.label for c in e.category]
-#                       ]
-      
         # Construct root tree.
-        self.root = GDDir(None, files=[GDFile(e) for e in entries])
+        self.root = GDDir(None, files=[GDFile(e, self.client) for e in entries])
 
     ###
     ### FUSE method overloads
     ###
 
-    # These methods should be kept very simple. Most things Drive-specific
-    # goes in the gd* methods.
+    # These methods should be kept very simple.
 
     def readdir(self, path, fh):
         if MY_DEBUG:
             print 'readdir(%s, %s)' % (path.encode(CODING), fh)
-        r = self.gdopen(path)
+        r = self.getfile(path)
         return ['.', '..'] + [f.name for f in r.dirs + r.files]
 
     def getattr(self, path, fh):
         """Build and return a stat(2)-like dict of attributes."""
         if MY_DEBUG:
             print 'getattr(%s, %s)' % (path.encode(CODING), fh)
-        f = self.gdopen(path)
+        f = self.getfile(path)
         return f.stat
 
     def read(self, path, size, offset, fh):
         if MY_DEBUG:
             print 'read(%s, %s, %s, %s)' % \
                         (path.encode(CODING), size, offset, fh)
-        return self.gdread(path, size, offset)
+        f = self.getfile(path)
+        return f.read(size, offset)
+
+    def open(self, path, flags):
+        f = self.getfile(path)
+        f.open()
+        return 0
+
+    def release(self, path, fh):
+        f = self.getfile(path)
+        f.close()
+        return 0
 
 def gdtime_to_ctime(timestr):
     # Note: milliseconds are stripped away.
@@ -196,9 +223,6 @@ def gdtime_to_ctime(timestr):
         return int(time.mktime(t)) # Convert to C-style time_t
 
 def drive_connect(username, password):
-    client = gdocs.DocsService(source=APP_NAME)
-    client.http_client.debug = FUSE_DEBUG
-    client.ClientLogin(username, password)
     return client
 
 def full_split(head):
