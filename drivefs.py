@@ -55,6 +55,7 @@ CODING     = 'utf-8'
 #CHUNKSIZE  = 4 * MBYTES # Size of a cache chunk.
 
 class GDBaseFile:
+    """Common superclass for GDDir and GDFile."""
     def __init__(self, entry=None):
         # entry == None means I am the root dir.
         name  = entry.title.text if entry else '/'
@@ -84,6 +85,7 @@ class GDBaseFile:
                                     self.name, id(self))
 
 class GDDir(GDBaseFile):
+    """Local representation of a Drive 'Category'."""
     def __init__(self, entry=None, dirs=[], files=[]):
         GDBaseFile.__init__(self, entry)
         self.stat['st_mode'] |= (stat.S_IFDIR |
@@ -92,6 +94,7 @@ class GDDir(GDBaseFile):
         self.dirs  = dirs
 
     def child(self, name):
+        """Find and return the child file or dir named name."""
         for d in self.dirs:
             if d.name == name:
                 return d
@@ -103,6 +106,7 @@ class GDDir(GDBaseFile):
         return None
 
 class GDFile(GDBaseFile):
+    """Local representation of a Drive file."""
     def __init__(self, entry, client):
         GDBaseFile.__init__(self, entry)
         self.stat['st_ctime'] = gdtime_to_ctime(
@@ -113,6 +117,12 @@ class GDFile(GDBaseFile):
                 entry.lastViewed.text  if entry.lastViewed  else 0)
         self.stat['st_mode'] |= stat.S_IFREG
         self.stat['st_size']  = get_filesize(entry)
+        # Grepping filesize from XML representation (a shameless kludge)
+        try:
+            m = re.search(r':quotaBytesUsed.*>(\d+)</', entry.ToString())
+            self.stat['st_size'] = int(m.groups()[0])
+        except AttributeError: # No match
+            pass # stat['st_size'] == 0; set in superclass.
         self.uri = entry.id.text
         self.src = entry.content.src
         self.cache = None
@@ -120,15 +130,18 @@ class GDFile(GDBaseFile):
         self.client = client
 
     def open(self):
+        """Open a Drive file for reading."""
         if not self.is_open:
             self.is_open = True
 
     def close(self):
+        """Close a file and destroy its cache."""
         if self.is_open:
             self.cache = None # Clear the cache
             self.is_open = False
 
     def read(self, size=None, offset=0):
+        """Read size bytes from offset and return as a string."""
         if not self.is_open:
             raise DriveFSError('%s is not open for reading!' % self.name)
         if size is None:
@@ -158,9 +171,11 @@ class GDFile(GDBaseFile):
         return self.cache[offset:size + offset]
 
 class DriveFSError(Exception):
+    """General exception which pertains to DriveFS directly."""
     pass
 
 class DriveFS(Operations):
+    """Class representing a mounted filesystem with file operations."""
     def __init__(self, email, password, path='/'):
         self.email = email
         self.root = None
@@ -181,6 +196,7 @@ class DriveFS(Operations):
                                         id(self))
 
     def getfile(self, path):
+        """Return the local object for the file at path (absolute)."""
         pl = full_split(path)
         if not pl or pl.pop() != '/': # Removes /
             raise DriveFSError('Path was not absolute: %s' % path)
@@ -194,6 +210,7 @@ class DriveFS(Operations):
             return f
 
     def refresh_tree(self):
+        """Sync the local tree with Google and rebuild it."""
         q = gdocs.DocumentQuery(params={'showfolders': 'false'})
         entries = self.client.GetDocumentListFeed(q.ToUri()).entry
         # Construct root tree.
@@ -203,22 +220,22 @@ class DriveFS(Operations):
     ### FUSE method overloads
     ###
 
-    # These methods should be kept very simple.
-
     def readdir(self, path, fh):
+        """Get a list of files in path."""
         if MY_DEBUG:
             print 'readdir(%s, %s)' % (path.encode(CODING), fh)
         r = self.getfile(path)
         return ['.', '..'] + [f.name for f in r.dirs + r.files]
 
     def getattr(self, path, fh):
-        """Build and return a stat(2)-like dict of attributes."""
+        """Returns a stat(2)-like dict of attributes."""
         if MY_DEBUG:
             print 'getattr(%s, %s)' % (path.encode(CODING), fh)
         f = self.getfile(path)
         return f.stat
 
     def read(self, path, size, offset, fh):
+        """Read at most size bytes from offset from the file at path."""
         if MY_DEBUG:
             print 'read(%s, %s, %s, %s)' % \
                         (path.encode(CODING), size, offset, fh)
@@ -226,16 +243,19 @@ class DriveFS(Operations):
         return f.read(size, offset)
 
     def open(self, path, flags):
+        """Open the file at path for reading."""
         f = self.getfile(path)
         f.open()
         return 0
 
     def release(self, path, fh):
+        """Close the file at path."""
         f = self.getfile(path)
         f.close()
         return 0
 
 def gdtime_to_ctime(timestr):
+    """Convert a time-string in Google format to Unix style time_t."""
     # Note: milliseconds are stripped away.
     # Sample Google time: 2012-05-22T19:07:06.721Z
     try:
@@ -245,9 +265,6 @@ def gdtime_to_ctime(timestr):
         return 0 # Dunno why this happens. Well, well.
     else:
         return int(time.mktime(t)) # Convert to C-style time_t
-
-def drive_connect(username, password):
-    return client
 
 def full_split(head):
     """Split a path fully into components and return a reversed list."""
@@ -268,6 +285,7 @@ def full_split(head):
     return l # Will be reversed!
 
 def path_to_uri(path):
+    """Get the resource-URI for a given path in the filesystem."""
     if len(path) < 1 or path[0] != '/':
         raise DriveFSError('Invalid path: %s' % path)
     if path =='/':
@@ -281,17 +299,6 @@ def path_to_uri(path):
         q['title'] = fn.encode(CODING)
         q['title-exact'] = 'true'
         return q.ToUri()
-
-def get_filesize(entry):
-    # Hacking a filesize getter onto the Drive API
-    # NOTE: A shameless kludge.
-    s = entry.ToString()
-    try:
-        m = re.search(r':quotaBytesUsed.*>(\d+)</', s)
-        filesize = int(m.groups()[0])
-        return filesize
-    except AttributeError: # No match
-        return 0 # Couldn't determine file size
 
 if __name__ == '__main__':
     if len(argv) != 4:
