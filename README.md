@@ -3,11 +3,21 @@ DriveFS
 
 Mount your Google Drive account as a FUSE filesystem.
 
-Limitations
+Limitations in the protocol
 -----------
 
-  * Read-only.
-  * Flat filesystem hierarchy (directories to be implemented).
+  * Directories cannot really be nestled, although a single file may belong to several folders.
+    Directories are more properly thought of as categories.
+  * Filename collisions are permitted by the protocol. This is unacceptable in a Unix filesystem, 
+    so some name mangling will have to occur.
+  * Files in Google's proprietary format ("docs") cannot be read. This limitation exist even in Google's
+    offical client.
+
+Limitations in my implementation
+------------
+
+  * The file system is read-only.
+  * Directories not implemented yet.
   * File reads are currently very slow.
  
 Dependencies
