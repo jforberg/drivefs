@@ -6,7 +6,7 @@ Mount your Google Drive account as a FUSE filesystem.
 Limitations in the protocol
 -----------
 
-  * Directories cannot really be nestled, although a single file may belong to several folders.
+  * Directories cannot really be nested, although a single file may belong to several folders.
     Directories are more properly thought of as categories.
   * Filename collisions are permitted by the protocol. This is unacceptable in a Unix filesystem, 
     so some name mangling will have to occur.
