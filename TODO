@@ -1,0 +1,18 @@
+Todo.
+
+* File caching.
+  - Create temporary files in /tmp upon open(), rm upon close().
+  - Maintain a list of tempfiles.
+  - Check SHA-1 or MD5s to see if changes need to be propagated.
+
+* Implement read-write capabilities.
+
+* Fake Unixy directories, study how categories really work.
+
+* Mangle names to avoid collisions in the filesystem.
+
+* Decide if Google's API works or if I have to (or want to) roll my own.
+
+* Check if a normal user has rights to create new files -- otherwise the 
+  project is slightly pointless.
+
