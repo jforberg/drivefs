@@ -76,6 +76,7 @@ class GDBaseFile:
         # from Google
         self.uri = entry.id.text if entry \
                 else gdocs.DocumentQuery().ToUri() # Root element.
+        self.is_doc = False # We don't handle docs for now.
 
     # Magic filesize getter.
     size = property(lambda self: self.stat['st_size'])
