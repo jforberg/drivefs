@@ -23,6 +23,7 @@ Limitations in my implementation
 Dependencies
 ------------
 
-  * [fusepy](http://code.google.com/p/fusepy/)
-  * fuse libraries version 2.6 or later
-  * python 2.5 or later
+  * [fusepy](http://code.google.com/p/fusepy/) (included in the current package)
+  * [Google data API](http://code.google.com/p/gdata-python-client)
+  * FUSE libraries version 2.6 or later
+  * 2.5 <= Python < 3.0
