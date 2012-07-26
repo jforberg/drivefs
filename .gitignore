@@ -1,0 +1,6 @@
+config.sh
+*.swp
+*.pyc
+gdata*
+mnt
+
