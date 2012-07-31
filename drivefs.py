@@ -38,7 +38,7 @@ import urlparse
 
 from sys import argv
 
-from fuse import *
+import fuse 
 
 import gdata.service as gdata
 import gdata.docs.service as gdocs # API relevant to Drive
@@ -175,7 +175,7 @@ class DriveFSError(Exception):
     """General exception which pertains to DriveFS directly."""
     pass
 
-class DriveFS(Operations):
+class DriveFS(fuse.Operations):
     """Class representing a mounted filesystem with file operations."""
     def __init__(self, email, password, path='/'):
         self.email = email
