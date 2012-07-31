@@ -2,4 +2,6 @@
 
 source ./config.sh
 
-fusermount -u "$mountpoint"
+kill `cat drivefs.$mountpoint.pid` && rm drivefs.$mountpoint.pid
+
+#fusermount -u "$mountpoint"

@@ -1,4 +1,4 @@
-#!/usr/bin/python2
+#!/usr/bin/python2.7
 # coding: utf-8 
 #
 # Copyright (c) 2012, Johan Förberg <johan@forberg.se>.  All rights reserved.
@@ -35,11 +35,9 @@ import stat
 import tempfile
 import httplib
 import urlparse
-
-from sys import argv
+import argparse
 
 import fuse 
-
 import gdata.service as gdata
 import gdata.docs.service as gdocs # API relevant to Drive
 
@@ -48,7 +46,7 @@ __author__ = 'Johan Förberg <johan@forberg.se>'
 KBYTES  = 2**10
 MBYTES  = 2**20
 
-APP_NAME   = 'DriveFS'
+APPNAME   = 'drivefs'
 MY_DEBUG   = True
 FUSE_DEBUG = False
 CODING     = 'utf-8'
@@ -182,7 +180,7 @@ class DriveFS(fuse.Operations):
         self.root = None
         self.cache = (None, None)
 
-        self.client = gdocs.DocsService(source=APP_NAME)
+        self.client = gdocs.DocsService(source=APPNAME)
         self.client.http_client.debug = FUSE_DEBUG
         self.client.ClientLogin(email, password)
 
@@ -300,11 +298,25 @@ def path_to_uri(path):
         q['title'] = fn.encode(CODING)
         q['title-exact'] = 'true'
         return q.ToUri()
+def get_filesize(entry):
+    # Hacking a filesize getter onto the Drive API
+    # NOTE: A shameless kludge.
+    s = entry.ToString()
+    try:
+        m = re.search(r':quotaBytesUsed.*>(\d+)</', s)
+        filesize = int(m.groups()[0])
+        return filesize
+    except AttributeError: # No match
+        return 0 # Couldn't determine file size    
 
 if __name__ == '__main__':
-    if len(argv) != 4:
-        print 'Usage: %s <username> <password> <mountpoint>' % argv[0]
-        exit(1)
-    fs = FUSE(DriveFS(argv[1], argv[2]), argv[3], 
-              foreground=True, nothreads=True, ro=True)
+    parser = argparse.ArgumentParser(prog=APPNAME)
+    parser.add_argument('email')
+    parser.add_argument('password')
+    parser.add_argument('mountpoint')
+
+    args = parser.parse_args()
+    
+    fs = fuse.FUSE(DriveFS(args.email, args.password), args.mountpoint, 
+                   foreground=True, nothreads=True, ro=True)
 

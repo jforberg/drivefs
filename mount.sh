@@ -2,4 +2,7 @@
 
 source ./config.sh
 
-python2 drivefs.py "$username" "$password" "$mountpoint"
+./drivefs.py "$username" "$password" "$mountpoint" &
+echo $! > drivefs.$mountpoint.pid
+
+
